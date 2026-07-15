@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# codex-naked - run Codex with stripped, bias-light homes.
+#
+# Points CODEX_HOME and, by default, HOME at clean directories so personal and
+# project context does not leak through ~/.codex, ~/.agents, memories, plugins,
+# hooks, or user-level skills. Codex's bundled system skills may still appear.
+set -euo pipefail
+
+VERSION="0.2.0"
+PROGRAM="$(basename "$0")"
+
+ORIGINAL_HOME="${HOME:?HOME is required}"
+REAL_CODEX_HOME="${CODEX_HOME_REAL:-$ORIGINAL_HOME/.codex}"
+NAKED_CODEX_HOME="${CODEX_NAKED_CODEX_HOME:-${CODEX_NAKED_HOME:-$ORIGINAL_HOME/.codex-naked}}"
+NAKED_USER_HOME="${CODEX_NAKED_USER_HOME:-$ORIGINAL_HOME/.codex-naked-home}"
+AUTH_MODE="${CODEX_NAKED_AUTH:-copy}"
+ISOLATE_HOME=1
+CLEAN_CODEX_HOME=1
+CLEAN_USER_HOME=1
+PRINT_ENV=0
+CODEX_ARGS=()
+
+usage() {
+  cat <<EOF
+$PROGRAM - run Codex with stripped, bias-light homes.
+
+Usage:
+  $PROGRAM [options] [--] <codex args...>
+
+Options must come before any Codex subcommand/args. Everything after the
+options is passed straight to codex. Your real ~/.codex and \$HOME are never
+modified.
+
+Options:
+  --keep              Reuse existing naked homes instead of wiping them.
+  --clean             Wipe both naked homes before launch (default).
+  --clean-codex-home  Wipe only the naked CODEX_HOME before launch.
+  --clean-user-home   Wipe only the isolated HOME before launch.
+  --codex-home DIR    Use DIR as the naked CODEX_HOME (default ~/.codex-naked;
+                      \$CODEX_NAKED_CODEX_HOME or legacy \$CODEX_NAKED_HOME).
+  --home DIR          Alias for --codex-home, kept for old muscle memory.
+  --user-home DIR     Use DIR as the isolated HOME (default ~/.codex-naked-home;
+                      \$CODEX_NAKED_USER_HOME).
+  --real DIR          Source Codex home to read auth from (default ~/.codex;
+                      \$CODEX_HOME_REAL).
+  --auth MODE         Auth handling: copy, symlink, or none (default copy;
+                      \$CODEX_NAKED_AUTH).
+  --yolo              Start Codex with --dangerously-bypass-approvals-and-sandbox.
+  --keep-home         Do not isolate HOME. Legacy mode; ~/.agents may leak.
+  --print-env         Print the resolved homes and exit without running Codex.
+  --version           Print version and exit.
+  -h, --help          Show this help.
+
+Auth modes:
+  copy     Copy auth.json from the real Codex home on every run. Simple and
+           disposable, but copied refresh tokens can go stale if another Codex
+           process refreshes the real auth later.
+  symlink  Link auth.json to the real Codex home. Tracks token refreshes, but
+           the naked Codex process shares the real auth file.
+  none     Do not provide auth, and remove any stale naked auth.json. Use with
+           CODEX_API_KEY/CODEX_ACCESS_TOKEN or sterile prompt-input inspection.
+
+Examples:
+  $PROGRAM
+
+  $PROGRAM exec --skip-git-repo-check --ephemeral --ignore-rules \\
+      -s read-only "say hi"
+
+  $PROGRAM --keep exec "continue the previous naked test"
+
+  $PROGRAM --yolo exec "prototype freely in the naked home"
+
+  $PROGRAM --auth none debug prompt-input "probe"
+
+  $PROGRAM --print-env
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --clean) CLEAN_CODEX_HOME=1; CLEAN_USER_HOME=1; shift ;;
+    --clean-codex-home) CLEAN_CODEX_HOME=1; shift ;;
+    --clean-user-home) CLEAN_USER_HOME=1; shift ;;
+    --keep) CLEAN_CODEX_HOME=0; CLEAN_USER_HOME=0; shift ;;
+    --codex-home|--home) NAKED_CODEX_HOME="${2:?$1 needs a DIR}"; shift 2 ;;
+    --user-home) NAKED_USER_HOME="${2:?--user-home needs a DIR}"; shift 2 ;;
+    --real) REAL_CODEX_HOME="${2:?--real needs a DIR}"; shift 2 ;;
+    --auth) AUTH_MODE="${2:?--auth needs copy, symlink, or none}"; shift 2 ;;
+    --auth=*) AUTH_MODE="${1#--auth=}"; shift ;;
+    --yolo) CODEX_ARGS+=("--dangerously-bypass-approvals-and-sandbox"); shift ;;
+    --keep-home) ISOLATE_HOME=0; shift ;;
+    --print-env) PRINT_ENV=1; shift ;;
+    --version) echo "$PROGRAM $VERSION"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
+resolve_path() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
+refuse_dangerous_clean() {
+  local label="$1"
+  local target real_codex real_home
+  target="$(resolve_path "$2")"
+  real_codex="$(resolve_path "$REAL_CODEX_HOME")"
+  real_home="$(resolve_path "$ORIGINAL_HOME")"
+  case "$target" in
+    ""|"/"|"/home"|"/home/$USER"|"/tmp")
+      echo "$PROGRAM: refusing to clean dangerous $label path: $target" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$target" = "$real_home" ] || [ "$target" = "$real_codex" ]; then
+    echo "$PROGRAM: refusing to clean real $label path: $target" >&2
+    exit 1
+  fi
+}
+
+case "$AUTH_MODE" in
+  copy|symlink|none) ;;
+  *)
+    echo "$PROGRAM: invalid --auth mode '$AUTH_MODE' (expected copy, symlink, or none)" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$PRINT_ENV" -eq 1 ]; then
+  cat <<EOF
+REAL_CODEX_HOME=$REAL_CODEX_HOME
+NAKED_CODEX_HOME=$NAKED_CODEX_HOME
+NAKED_USER_HOME=$NAKED_USER_HOME
+ISOLATE_HOME=$ISOLATE_HOME
+CLEAN_CODEX_HOME=$CLEAN_CODEX_HOME
+CLEAN_USER_HOME=$CLEAN_USER_HOME
+AUTH_MODE=$AUTH_MODE
+EOF
+  exit 0
+fi
+
+if [ "$AUTH_MODE" != "none" ]; then
+  if [ ! -d "$REAL_CODEX_HOME" ]; then
+    echo "$PROGRAM: real Codex home not found at $REAL_CODEX_HOME" >&2
+    exit 1
+  fi
+  if [ ! -f "$REAL_CODEX_HOME/auth.json" ]; then
+    echo "$PROGRAM: no auth.json at $REAL_CODEX_HOME/auth.json - run 'codex login' first, or use --auth none." >&2
+    exit 1
+  fi
+fi
+
+if [ "$CLEAN_CODEX_HOME" -eq 1 ] && [ -e "$NAKED_CODEX_HOME" ]; then
+  refuse_dangerous_clean "CODEX_HOME" "$NAKED_CODEX_HOME"
+  rm -rf -- "$NAKED_CODEX_HOME"
+fi
+if [ "$ISOLATE_HOME" -eq 1 ] && [ "$CLEAN_USER_HOME" -eq 1 ] && [ -e "$NAKED_USER_HOME" ]; then
+  refuse_dangerous_clean "HOME" "$NAKED_USER_HOME"
+  rm -rf -- "$NAKED_USER_HOME"
+fi
+
+mkdir -p "$NAKED_CODEX_HOME"
+
+case "$AUTH_MODE" in
+  copy)
+    rm -f -- "$NAKED_CODEX_HOME/auth.json"
+    cp -f "$REAL_CODEX_HOME/auth.json" "$NAKED_CODEX_HOME/auth.json"
+    chmod 600 "$NAKED_CODEX_HOME/auth.json"
+    ;;
+  symlink)
+    rm -f -- "$NAKED_CODEX_HOME/auth.json"
+    ln -s "$(resolve_path "$REAL_CODEX_HOME/auth.json")" "$NAKED_CODEX_HOME/auth.json"
+    ;;
+  none)
+    rm -f -- "$NAKED_CODEX_HOME/auth.json"
+    ;;
+esac
+
+if [ "$ISOLATE_HOME" -eq 1 ]; then
+  mkdir -p \
+    "$NAKED_USER_HOME" \
+    "$NAKED_USER_HOME/.config" \
+    "$NAKED_USER_HOME/.local/share" \
+    "$NAKED_USER_HOME/.local/state" \
+    "$NAKED_USER_HOME/.cache"
+  export HOME="$NAKED_USER_HOME"
+  export XDG_CONFIG_HOME="$NAKED_USER_HOME/.config"
+  export XDG_DATA_HOME="$NAKED_USER_HOME/.local/share"
+  export XDG_STATE_HOME="$NAKED_USER_HOME/.local/state"
+  export XDG_CACHE_HOME="$NAKED_USER_HOME/.cache"
+fi
+
+export CODEX_HOME="$NAKED_CODEX_HOME"
+exec codex "${CODEX_ARGS[@]}" "$@"
