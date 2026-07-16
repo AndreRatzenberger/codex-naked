@@ -3,10 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/AndreRatzenberger/codex-naked"><img src="https://img.shields.io/badge/Codex-cleanroom-24e2ff.svg" alt="Codex cleanroom"></a>
-  <a href="https://github.com/AndreRatzenberger/codex-naked"><img src="https://img.shields.io/badge/shell-bash-56ffd0.svg" alt="Bash script"></a>
-  <a href="https://github.com/AndreRatzenberger/codex-naked"><img src="https://img.shields.io/badge/default-fresh%20home-brightgreen.svg" alt="Fresh home by default"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://github.com/AndreRatzenberger/codex-naked/stargazers"><img src="https://img.shields.io/github/stars/AndreRatzenberger/codex-naked?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/AndreRatzenberger/codex-naked/commits/main"><img src="https://img.shields.io/github/last-commit/AndreRatzenberger/codex-naked?style=flat-square" alt="Last commit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/AndreRatzenberger/codex-naked?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
